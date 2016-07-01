@@ -1,6 +1,6 @@
 import BaseHTTPServer
 import json
-from ocr import OCRNeuralNetwork
+from hdr import HdrNeuralNetwork
 import numpy as np
 
 HOST_NAME = 'localhost'
@@ -18,7 +18,7 @@ data_labels = data_labels.tolist()
 # If a neural network file does not exist, train it using all 5000 existing data samples.
 # Based on data collected from neural_network_design.py, 15 is the optimal number
 # for hidden nodes
-nn = OCRNeuralNetwork(HIDDEN_NODE_COUNT, data_matrix, data_labels, list(range(5000)));
+nn = HdrNeuralNetwork(HIDDEN_NODE_COUNT, data_matrix, data_labels, list(range(5000)));
 
 class JSONHandler(BaseHTTPServer.BaseHTTPRequestHandler):
     def do_POST(s):
@@ -32,6 +32,8 @@ class JSONHandler(BaseHTTPServer.BaseHTTPRequestHandler):
             nn.train(payload['trainArray'])
             nn.save()
         elif payload.get('predict'):
+            # print str(payload['image'])
+            # print nn.predict(str(payload['image']))
             try:
                 response = {"type":"test", "result":nn.predict(str(payload['image']))}
             except:

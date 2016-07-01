@@ -1,11 +1,16 @@
+
+# coding: utf-8
+
+# In[ ]:
+
 # hand-written digit recognition (hdr)
 
-import csv
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 import numpy as np
-from numpy import matrix
-from math import pow
+from scipy import optimize
+
+import math
 from collections import namedtuple
 import math
 import random
@@ -21,34 +26,57 @@ what a drawn digit is by calling predict().
 The weights that define the neural network can be saved to a file, NN_FILE_PATH,
 to be reloaded upon initilization.
 """
-class OCRNeuralNetwork:
-    LEARNING_RATE = 0.1
+
+class HdrNeuralNetwork:
     WIDTH_IN_PIXELS = 20
+    LEARNING_RATE = 0.1
+    # for online learning
     NN_FILE_PATH = 'nn.json'
 
-    def __init__(self, num_hidden_nodes, data_matrix, data_labels, training_indices, use_file=True):
+    def __init__(self, num_hidden_nodes, data_matrix, data_labels, use_file=True):
+        self.num_hidden_nodes = num_hidden_nodes
+        self._use_file = use_file 
+        # self.theta1
+        # self.theta2
+        
+        self.LAMBDA = 0
+        # for regularization of the cost function        
         self.sigmoid = np.vectorize(self._sigmoid_scalar)
         self.sigmoid_prime = np.vectorize(self._sigmoid_prime_scalar)
-        self._use_file = use_file
-        self.data_matrix = data_matrix
-        self.data_labels = data_labels
+        self.data_matrix = data_matrix # 2-D list
+        self.data_labels = data_labels # 1-D list
+        self.sample_num = len(self.data_labels)
 
-        if (not os.path.isfile(OCRNeuralNetwork.NN_FILE_PATH) or not use_file):
+        if (not os.path.isfile(HdrNeuralNetwork.NN_FILE_PATH) or not use_file):
+            # it could also be self.NN_FILE_PATH
             # Step 1: Initialize weights to small numbers
-            self.theta1 = self._rand_initialize_weights(400, num_hidden_nodes)
-            self.theta2 = self._rand_initialize_weights(num_hidden_nodes, 10)
-            self.input_layer_bias = self._rand_initialize_weights(1, num_hidden_nodes)
-            self.hidden_layer_bias = self._rand_initialize_weights(1, 10)
+            self.theta1 = self._rand_initialize_weights(self.num_hidden_nodes, 400+1)
+            # num_hidden_nodes*401 matrix, the one is the bias
+            self.theta2 = self._rand_initialize_weights(10, self.num_hidden_nodes+1)
+            # 10*(num_hidden_nodes+1) matrix, the one is the bias
 
             # Train using sample data
-            TrainData = namedtuple('TrainData', ['y0', 'label'])
-            self.train([TrainData(self.data_matrix[i], int(self.data_labels[i])) for i in training_indices])
+            TrainData = namedtuple('TrainData', ['fig', 'label'])
+            the_temp = tuple(np.row_stack((self.theta1.flatten(1).T, self.theta2.flatten(1).T)).T.tolist()[0])
+            theta0 = np.asarray(the_temp) 
+            args = tuple([TrainData(self.data_matrix[i], int(self.data_labels[i])) for i in range(self.sample_num)])
+            # print 'Values of the cost function:'
+            print 'Start to optimize the cost function...'
+            
+            res = optimize.fmin_cg(self._nnCostFunction, theta0, fprime=self._nnGrad, args=args, gtol=1e-3, maxiter=200)
+            # gtol=1e-5, 1e-3; maxiter=None, 2, 200*6175 (default?), 1*6175, 200, 50, 100
+            res = np.mat(res)
+            self.theta1 = np.reshape(res[0,0:self.num_hidden_nodes*401], (400+1, self.num_hidden_nodes)).T
+            self.theta2 = np.reshape(res[0,self.num_hidden_nodes*401:], (self.num_hidden_nodes+1, 10)).T
+            # self.train([TrainData(self.data_matrix[i], int(self.data_labels[i])) for i in range(self.sample_num)])
+
             self.save()
         else:
             self._load()
 
     def _rand_initialize_weights(self, size_in, size_out):
-        return [((x * 0.12) - 0.06) for x in np.random.rand(size_out, size_in)]
+        return np.mat(np.random.rand(size_out, size_in)*0.24-0.12)
+        # return np.mat(np.random.rand(size_out, size_in)*0.12-0.06)
 
     # The sigmoid activation function. Operates on scalars.
     def _sigmoid_scalar(self, z):
@@ -57,44 +85,144 @@ class OCRNeuralNetwork:
     def _sigmoid_prime_scalar(self, z):
         return self.sigmoid(z) * (1 - self.sigmoid(z))
 
-    def _draw(self, sample):
+    def draw(self, sample):
+        # sample is a list? with 20*WIDTH_IN_PIXELS pixels for the hand-written digit
         pixelArray = [sample[j:j+self.WIDTH_IN_PIXELS] for j in xrange(0, len(sample), self.WIDTH_IN_PIXELS)]
+        # xrange(start, stop[, step]), list comprehension, a list of lists, 2D list
         plt.imshow(zip(*pixelArray), cmap = cm.Greys_r, interpolation="nearest")
+        # imshow is used to plot the image
+        # zip returns a list of tuples, an array_like list, the grayscale (not a colormap)
+        # One common place that interpolation happens is when you resize an image
         plt.show()
+        # show is used to show the plot
 
-    def train(self, training_data_array):
+    def _nnCostFunction(self, the_thetas, *args):
+        
+        the_thetas = np.mat(the_thetas)
+        theta1 = np.reshape(the_thetas[0,0:self.num_hidden_nodes*401], (400+1, self.num_hidden_nodes)).T
+        theta2 = np.reshape(the_thetas[0,self.num_hidden_nodes*401:], (self.num_hidden_nodes+1, 10)).T
+        training_data_array = args
+        
+        J=0        
+        for data in training_data_array:
+            a1 = np.mat(data.fig).T
+            # 400*1 matrix
+            z2 = np.dot(theta1, np.row_stack((1, a1)))
+            # num_hidden_nodes*1 matrix
+            a2 = self.sigmoid(z2)
+
+            z3 = np.dot(theta2, np.row_stack((1, a2)))
+            # 10*1 matrix
+            a3 = self.sigmoid(z3)
+
+            y = [0] * 10 # y is a python list for easy initialization and is later turned into an np matrix (3 lines down).
+            y[data.label] = 1
+            # 1*10 list          
+            
+            for j in range(10):
+                J = J + np.mat(y).T[j,0]*math.log(a3[j,0])+(1-np.mat(y).T[j,0])*math.log(1-a3[j,0])
+                # numerically a3[j,0] could be smaller than 0 or larger than 1 a bit
+
+        J = -J/self.sample_num + self.LAMBDA/(2*self.sample_num)*(np.multiply(theta1[:,1:], theta1[:,1:]).sum()+np.multiply(theta2[:,1:], theta2[:,1:]).sum())
+        # print J 
+        
+        return J
+        
+    def _nnGrad(self, the_thetas, *args):
+        
+        the_thetas = np.mat(the_thetas)
+        theta1 = np.reshape(the_thetas[0,0:self.num_hidden_nodes*401], (400+1, self.num_hidden_nodes)).T
+        theta2 = np.reshape(the_thetas[0,self.num_hidden_nodes*401:], (self.num_hidden_nodes+1, 10)).T
+        training_data_array = args
+        
+        Delta1 = np.mat(np.zeros(theta1.shape))
+        # num_hidden_nodes*401 matrix
+        Delta2 = np.mat(np.zeros(theta2.shape))
+        # 10*(num_hidden_nodes+1) matrix
+        theta1_grad = np.mat(np.zeros(theta1.shape))
+        theta2_grad = np.mat(np.zeros(theta2.shape))
+        
         for data in training_data_array:
             # Step 2: Forward propagation
-            y1 = np.dot(np.mat(self.theta1), np.mat(data['y0']).T)
-            sum1 =  y1 + np.mat(self.input_layer_bias) # Add the bias
-            y1 = self.sigmoid(sum1)
+            a1 = np.mat(data.fig).T
+            # 400*1 matrix
+            z2 = np.dot(theta1, np.row_stack((1, a1)))
+            # num_hidden_nodes*1 matrix
+            a2 = self.sigmoid(z2)
 
-            y2 = np.dot(np.array(self.theta2), y1)
-            y2 = np.add(y2, self.hidden_layer_bias) # Add the bias
-            y2 = self.sigmoid(y2)
+            z3 = np.dot(theta2, np.row_stack((1, a2)))
+            # 10*1 matrix
+            a3 = self.sigmoid(z3)
+            
+            # Step 3: Back propagation
+            y = [0] * 10 # y is a python list for easy initialization and is later turned into an np matrix (2 lines down).
+            y[data.label] = 1
+            # 1*10 list
+                      
+            delta3 = a3 - np.mat(y).T
+            # 10*1 matrix
+            z2plus = np.row_stack((0, z2))
+            # (num_hidden_nodes+1)*1 matrix
+            delta2 = np.multiply(np.dot(theta2.T, delta3), self.sigmoid_prime(z2plus))
+            # (num_hidden_nodes+1)*1 matrix
+            delta2 = delta2[1:,0]
+            # num_hidden_nodes*1 matrix
+                      
+            # Step 4: Sum delta*a.T and calculate the derivatives
+            Delta1 = Delta1 + np.dot(delta2, np.row_stack((1, a1)).T)
+            Delta2 = Delta2 + np.dot(delta3, np.row_stack((1, a2)).T)
+        
+        theta1_grad[:,0] = Delta1[:,0]/self.sample_num
+        theta2_grad[:,0] = Delta2[:,0]/self.sample_num
+        theta1_grad[:,1:] = Delta1[:,1:]/self.sample_num + self.LAMBDA/self.sample_num*theta1[:,1:]
+        theta2_grad[:,1:] = Delta2[:,1:]/self.sample_num + self.LAMBDA/self.sample_num*theta2[:,1:] 
+        
+        ret = tuple(np.row_stack((theta1_grad.flatten(1).T, theta2_grad.flatten(1).T)).T.tolist()[0])
+        return np.asarray(ret)
+
+    def train(self, training_data_array): 
+        data = training_data_array[0] #dict
+            # Step 2: Forward propagation
+        a1 = np.mat(data['y0']).T
+            # 400*1 matrix
+        z2 = np.dot(self.theta1, np.row_stack((1, a1)))
+            # num_hidden_nodes*1 matrix
+        a2 = self.sigmoid(z2)
+
+        z3 = np.dot(self.theta2, np.row_stack((1, a2)))
+            # 10*1 matrix
+        a3 = self.sigmoid(z3)
 
             # Step 3: Back propagation
-            actual_vals = [0] * 10 # actual_vals is a python list for easy initialization and is later turned into an np matrix (2 lines down).
-            actual_vals[data['label']] = 1
-            output_errors = np.mat(actual_vals).T - np.mat(y2)
-            hidden_errors = np.multiply(np.dot(np.mat(self.theta2).T, output_errors), self.sigmoid_prime(sum1))
+        y = [0] * 10 # y is a python list for easy initialization and is later turned into an np matrix (2 lines down).
+        y[data['label']] = 1
+            # 1*10 list
+                      
+        delta3 = a3 - np.mat(y).T
+            # 10*1 matrix
+        z2plus = np.row_stack((0, z2))
+            # (num_hidden_nodes+1)*1 matrix
+        delta2 = np.multiply(np.dot(self.theta2.T, delta3), self.sigmoid_prime(z2plus))
+            # (num_hidden_nodes+1)*1 matrix
+        delta2 = delta2[1:,0]
+            # num_hidden_nodes*1 matrix
 
             # Step 4: Update weights
-            self.theta1 += self.LEARNING_RATE * np.dot(np.mat(hidden_errors), np.mat(data['y0']))
-            self.theta2 += self.LEARNING_RATE * np.dot(np.mat(output_errors), np.mat(y1).T)
-            self.hidden_layer_bias += self.LEARNING_RATE * output_errors
-            self.input_layer_bias += self.LEARNING_RATE * hidden_errors
+        self.theta1 -= self.LEARNING_RATE * np.dot(delta2, np.row_stack((1, a1)).T)
+        self.theta2 -= self.LEARNING_RATE * np.dot(delta3, np.row_stack((1, a2)).T)
 
     def predict(self, test):
-        y1 = np.dot(np.mat(self.theta1), np.mat(test).T)
-        y1 =  y1 + np.mat(self.input_layer_bias) # Add the bias
-        y1 = self.sigmoid(y1)
+        a1 = np.mat(test).T
+        # 400*1 matrix
+        z2 = np.dot(self.theta1, np.row_stack((1, a1)))
+        # num_hidden_nodes*1 matrix
+        a2 = self.sigmoid(z2)
 
-        y2 = np.dot(np.array(self.theta2), y1)
-        y2 = np.add(y2, self.hidden_layer_bias) # Add the bias
-        y2 = self.sigmoid(y2)
+        z3 = np.dot(self.theta2, np.row_stack((1, a2)))
+        # 10*1 matrix
+        a3 = self.sigmoid(z3)        
 
-        results = y2.T.tolist()[0]
+        results = a3.T.tolist()[0]
         return results.index(max(results))
 
     def save(self):
@@ -102,21 +230,22 @@ class OCRNeuralNetwork:
             return
 
         json_neural_network = {
-            "theta1":[np_mat.tolist()[0] for np_mat in self.theta1],
-            "theta2":[np_mat.tolist()[0] for np_mat in self.theta2],
-            "b1":self.input_layer_bias[0].tolist()[0],
-            "b2":self.hidden_layer_bias[0].tolist()[0]
+            "theta1":self.theta1.flatten(1).tolist()[0],
+            "theta2":self.theta2.flatten(1).tolist()[0]
         };
-        with open(OCRNeuralNetwork.NN_FILE_PATH,'w') as nnFile:
+        with open(HdrNeuralNetwork.NN_FILE_PATH,'w') as nnFile:
             json.dump(json_neural_network, nnFile)
+            
+        print 'nn.json is now saved'
 
     def _load(self):
         if not self._use_file:
             return
 
-        with open(OCRNeuralNetwork.NN_FILE_PATH) as nnFile:
+        with open(HdrNeuralNetwork.NN_FILE_PATH) as nnFile:
             nn = json.load(nnFile)
-        self.theta1 = [np.array(li) for li in nn['theta1']]
-        self.theta2 = [np.array(li) for li in nn['theta2']]
-        self.input_layer_bias = [np.array(nn['b1'][0])]
-        self.hidden_layer_bias = [np.array(nn['b2'][0])]
+        self.theta1 = np.reshape(np.mat(nn['theta1']), (400+1, self.num_hidden_nodes)).T 
+        self.theta2 = np.reshape(np.mat(nn['theta2']), (self.num_hidden_nodes+1, 10)).T 
+        
+        print 'reloading previous nn.json'
+
